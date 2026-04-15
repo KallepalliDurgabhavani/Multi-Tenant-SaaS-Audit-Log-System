@@ -1,0 +1,116 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_4LW_COMMANDS_WHITELIST: ruok,stat,srvr,mntr,conf
+      KAFKA_OPTS: -Dzookeeper.4lw.commands.whitelist=ruok,stat,srvr,mntr,conf
+    ports:
+      - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "echo srvr | nc -w 2 localhost 2181 | grep -q 'Zookeeper version'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka
+    command:
+      - /bin/bash
+      - -c
+      - |
+        cat <<'EOF' >/etc/kafka/kafka_server_jaas.conf
+        KafkaServer {
+          org.apache.kafka.common.security.scram.ScramLoginModule required;
+        };
+        sasl_plaintext.KafkaServer {
+          org.apache.kafka.common.security.scram.ScramLoginModule required;
+        };
+        EOF
+        /etc/confluent/docker/configure
+        /etc/confluent/docker/launch
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,SASL_PLAINTEXT://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,SASL_PLAINTEXT://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
+      KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf -Dzookeeper.sasl.client=false
+      KAFKA_AUTHORIZER_CLASS_NAME: kafka.security.authorizer.AclAuthorizer
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+      KAFKA_SUPER_USERS: User:admin;User:ANONYMOUS
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG4J_LOGGERS: "kafka.authorizer.logger=INFO,kafka.request.logger=INFO"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9092'"]
+      interval: 10s
+      timeout: 8s
+      retries: 15
+      start_period: 25s
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  app:
+    build:
+      context: ./app
+    container_name: app
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      APP_PORT: ${APP_PORT:-8080}
+      KAFKA_SASL_BROKER: ${KAFKA_SASL_BROKER:-kafka:9093}
+      KAFKA_CLIENT_MECHANISM: ${KAFKA_CLIENT_MECHANISM:-SCRAM-SHA-256}
+      TENANT_ACME_PASSWORD: ${TENANT_ACME_PASSWORD:-change-me-acme}
+      TENANT_GLOBEX_PASSWORD: ${TENANT_GLOBEX_PASSWORD:-change-me-globex}
+      TENANT_INITECH_PASSWORD: ${TENANT_INITECH_PASSWORD:-change-me-initech}
+      GATEWAY_PASSWORD: ${GATEWAY_PASSWORD:-change-me-gateway}
+      ARCHIVER_PASSWORD: ${ARCHIVER_PASSWORD:-change-me-archiver}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-kafka-archive}
+      ARCHIVE_MIN_AGE_MS: ${ARCHIVE_MIN_AGE_MS:-300000}
+      ARCHIVER_CONSUMER_GROUP: ${ARCHIVER_CONSUMER_GROUP:-archive-worker-v1}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s

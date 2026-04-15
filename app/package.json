@@ -1,0 +1,16 @@
+{
+  "name": "audit-log-app",
+  "version": "1.0.0",
+  "description": "Multi-tenant audit gateway and archival worker",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "kafkajs": "^2.2.4",
+    "minio": "^8.0.1"
+  }
+}
